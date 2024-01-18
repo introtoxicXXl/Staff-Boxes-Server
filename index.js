@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const jwt = require('jsonwebtoken');
 const port = process.env.PORT || 5000;
 
 app = express();
@@ -30,7 +31,51 @@ async function run() {
 
         const usersCollection = client.db('Stuff-boxes').collection('users');
 
+        // middleware 
+        // verify token 
+        const verifyToken = (req, res, next) => {
+            if (!req.headers.authorization) {
+                return res.status(401).send({ message: 'Unauthorization Access' })
+            }
+            const token = req.headers.authorization.split(' ')[1];
+            jwt.verify(token, process.env.JWT_SECRET, (err) => {
+                if (err) {
+                    return res.status(401).send({ message: 'Unauthorization Access' })
+                }
+                req.decoded = decoded
+                next()
+            })
+        }
 
+        // admin verify
+        const adminVerify = async (req, res, next) => {
+            const email = req.decoded.email;
+            const query = { email: email };
+            const user = await usersCollection.find(query);
+            const isAdmin = user.role === "Admin";
+            if (!isAdmin) {
+                return res.status(403).send({ message: 'Forbidden Access' })
+            }
+            next();
+        }
+        // deliveryMan verify
+        const deliveryMan = async (req, res, next) => {
+            const email = req.decoded.email;
+            const query = { email: email };
+            const user = await usersCollection.find(query);
+            const isAdmin = user.role === "Delivery Man";
+            if (!isAdmin) {
+                return res.status(403).send({ message: 'Forbidden Access' })
+            }
+            next();
+        }
+
+        // jwt api 
+        app.post('/jwt', async (req, res) => {
+            const user = req.body;
+            const token = jwt.sign(user, process.env.JWT_SECRET, { expiresIn: '3h' });
+            res.send({ token })
+        })
 
         // users get api 
         app.get('/users', async (req, res) => {
@@ -48,6 +93,7 @@ async function run() {
             const result = await usersCollection.insertOne(user);
             res.send(result);
         })
+
 
 
 
