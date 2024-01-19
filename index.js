@@ -51,7 +51,7 @@ async function run() {
         const adminVerify = async (req, res, next) => {
             const email = req.decoded.email;
             const query = { email: email };
-            const user = await usersCollection.find(query);
+            const user = await usersCollection.findOne(query);
             const isAdmin = user.role === "Admin";
             if (!isAdmin) {
                 return res.status(403).send({ message: 'Forbidden Access' })
@@ -85,6 +85,37 @@ async function run() {
             const result = await usersCollection.findOne(query);
             res.send(result)
         })
+        // users get api 
+        app.get('/admin/userDetails', verifyToken, async (req, res) => {
+            const pipeline = [
+                {
+                    $match: {
+                        role: { $in: ['Customer', 'Admin'] }
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'bookParcel',
+                        localField: 'email',
+                        foreignField: 'email',
+                        as: 'parcels'
+                    }
+                },
+                {
+                    $project: {
+                        _id: 1,
+                        name: { $concat: ['$firstName', ' ', '$lastName'] }, // Combine firstName and lastName
+                        email: 1,
+                        role:1,
+                        phoneNumber: 1,
+                        numberOfParcels: { $size: '$parcels' },
+                        totalSpentMoney: { $sum: '$parcels.price' }
+                    }
+                }
+            ];
+            const result = await usersCollection.aggregate(pipeline).toArray();
+            res.send(result)
+        })
         // user post api 
         app.post('/users', async (req, res) => {
             const user = req.body;
@@ -111,7 +142,7 @@ async function run() {
             res.send({ admin })
         })
         // deliveryman api 
-        app.get('/users/admin/:email', verifyToken, async (req, res) => {
+        app.get('/users/deliveryMan/:email', verifyToken, async (req, res) => {
             const email = req.params.email;
             if (email !== req.decoded.email) {
                 return res.status(403).send({ message: 'Unauthorize Access' })
@@ -125,12 +156,14 @@ async function run() {
             res.send({ deliveryMan })
         })
         // make admin api 
-        app.patch('/users/admin/:id', verifyToken, verifyAdmin, async (req, res) => {
+        app.patch('/users/admin/:id', verifyToken, adminVerify, async (req, res) => {
             const id = req.params.id;
+            const item = req.body;
+            console.log(item)
             const filter = { _id: new ObjectId(id) };
             const updateDoc = {
                 $set: {
-                    role: 'Admin'
+                    role: item.role
                 }
             }
             const result = await usersCollection.updateOne(filter, updateDoc)
@@ -149,6 +182,11 @@ async function run() {
             const email = req.params.email;
             const query = { email: email };
             const result = await bookParcelCollection.find(query).toArray();
+            res.send(result);
+        })
+        // book parcel get api 
+        app.get('/bookParcel', verifyToken,adminVerify, async (req, res) => {
+            const result = await bookParcelCollection.find().toArray();
             res.send(result);
         })
         // book parcel get api by id
