@@ -12,7 +12,7 @@ app.use(express.json())
 
 
 
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.q1v3e.mongodb.net/?retryWrites=true&w=majority`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -30,19 +30,20 @@ async function run() {
         await client.connect();
 
         const usersCollection = client.db('Stuff-boxes').collection('users');
+        const bookParcelCollection = client.db('Stuff-boxes').collection('bookParcel');
 
         // middleware 
         // verify token 
         const verifyToken = (req, res, next) => {
             if (!req.headers.authorization) {
-                return res.status(401).send({ message: 'Unauthorization Access' })
+                return res.status(401).send({ message: 'Unauthorize Access' })
             }
             const token = req.headers.authorization.split(' ')[1];
-            jwt.verify(token, process.env.JWT_SECRET, (err) => {
+            jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
                 if (err) {
-                    return res.status(401).send({ message: 'Unauthorization Access' })
+                    return res.status(401).send({ message: 'Unauthorize Access' })
                 }
-                req.decoded = decoded
+                req.decoded = decoded;
                 next()
             })
         }
@@ -76,9 +77,12 @@ async function run() {
             res.send({ token })
         })
 
+        // user related api 
         // users get api 
-        app.get('/users', async (req, res) => {
-            const result = await usersCollection.find().toArray();
+        app.get('/users/:email', async (req, res) => {
+            const email = req.params.email;
+            const query = { email: email }
+            const result = await usersCollection.findOne(query);
             res.send(result)
         })
         // user post api 
@@ -92,7 +96,105 @@ async function run() {
             const result = await usersCollection.insertOne(user);
             res.send(result);
         })
+        // admin api 
+        app.get('/users/admin/:email', verifyToken, async (req, res) => {
+            const email = req.params.email;
+            if (email !== req.decoded.email) {
+                return res.status(403).send({ message: 'Unauthorize Access' })
+            }
+            const query = { email: email };
+            const user = await usersCollection.findOne(query);
+            let admin = false;
+            if (user) {
+                admin = user?.role === "Admin"
+            }
+            res.send({ admin })
+        })
+        // deliveryman api 
+        app.get('/users/admin/:email', verifyToken, async (req, res) => {
+            const email = req.params.email;
+            if (email !== req.decoded.email) {
+                return res.status(403).send({ message: 'Unauthorize Access' })
+            }
+            const query = { email: email };
+            const user = await usersCollection.findOne(query);
+            let deliveryMan = false;
+            if (user) {
+                admin = user?.role === "Delivery Man"
+            }
+            res.send({ deliveryMan })
+        })
+        // make admin api 
+        app.patch('/users/admin/:id', verifyToken, verifyAdmin, async (req, res) => {
+            const id = req.params.id;
+            const filter = { _id: new ObjectId(id) };
+            const updateDoc = {
+                $set: {
+                    role: 'Admin'
+                }
+            }
+            const result = await usersCollection.updateOne(filter, updateDoc)
+            res.send(result);
+        })
 
+        // booking parcel api 
+        // book parcel post api 
+        app.post('/bookParcel', verifyToken, async (req, res) => {
+            const bookingInfo = req.body;
+            const result = await bookParcelCollection.insertOne(bookingInfo);
+            res.send(result);
+        })
+        // book parcel get api by email
+        app.get('/bookParcel/:email', verifyToken, async (req, res) => {
+            const email = req.params.email;
+            const query = { email: email };
+            const result = await bookParcelCollection.find(query).toArray();
+            res.send(result);
+        })
+        // book parcel get api by id
+        app.get('/bookMyParcel/:id', verifyToken, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) };
+            const result = await bookParcelCollection.findOne(query);
+            res.send(result);
+        })
+        // book parcel patch api by id
+        app.patch('/bookMyParcel/:id', verifyToken, async (req, res) => {
+            const id = req.params.id;
+            const item = req.body;
+            const filter = { _id: new ObjectId(id) };
+            const updateDoc = {
+                $set: {
+                    firstName: item.firstName,
+                    lastName: item.lastName,
+                    email: item.email,
+                    phoneNumber: item.phoneNumber,
+                    parcelType: item.parcelType,
+                    receiverName: item.receiverName,
+                    price: item.price,
+                    receiverPhone: item.receiverPhone,
+                    deliveryAddress: item.deliveryAddress,
+                    requestDate: item.requestDate,
+                    deliveryAddressLatitude: item.deliveryAddressLatitude,
+                    deliveryAddressLongitude: item.deliveryAddressLongitude,
+                    parcelWeight: item.parcelWeight
+                }
+            }
+            const result = await bookParcelCollection.updateOne(filter, updateDoc);
+            res.send(result);
+        })
+
+        app.patch('/cancel/:id', async (req, res) => {
+            const id = req.params.id;
+            console.log(id)
+            const filter = { _id: new ObjectId(id) };
+            const doc = {
+                $set: {
+                    status: "Cancel"
+                }
+            }
+            const result = await bookParcelCollection.updateOne(filter, doc)
+        })
 
 
 
