@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const port = process.env.PORT || 5000;
+const stripe = require("stripe")(process.env.STRIP_SECRET_KEY);
 
 app = express();
 
@@ -32,6 +33,7 @@ async function run() {
         const usersCollection = client.db('Stuff-boxes').collection('users');
         const deliveryMansCollection = client.db('Stuff-boxes').collection('deliveryMan');
         const bookParcelCollection = client.db('Stuff-boxes').collection('bookParcel');
+        const paymentsCollection = client.db('Stuff-boxes').collection('payment');
 
         // middleware 
         // verify token 
@@ -315,36 +317,66 @@ async function run() {
 
 
         // stat api 
-        app.get('/userStat/:email', async (req, res) => {
+        app.get('/userStat/:email', verifyToken, async (req, res) => {
             const email = req.params.email;
             const pipeline = [
                 {
-                  $match: { email: { $eq: email } } 
+                    $match: { email: { $eq: email } }
                 },
                 {
-                  $group: {
-                    _id: null,
-                    parcelCount: { $sum: 1 },
-                    totalCost: { $sum: '$price' } 
-                  }
+                    $group: {
+                        _id: null,
+                        parcelCount: { $sum: 1 },
+                        totalCost: { $sum: '$price' }
+                    }
                 },
                 {
-                  $project: {
-                    _id: 0,
-                    parcelCount: 1,
-                    totalCost: 1
-                  }
+                    $project: {
+                        _id: 0,
+                        parcelCount: 1,
+                        totalCost: 1
+                    }
                 }
-              ];
-          
-              const result = await bookParcelCollection.aggregate(pipeline).toArray();
-              if (result.length > 0) {
+            ];
+
+            const result = await bookParcelCollection.aggregate(pipeline).toArray();
+            if (result.length > 0) {
                 res.send(result[0]);
-              } else {
+            } else {
                 res.send({ parcelCount: 0, totalCost: 0 });
-              }
+            }
         })
 
+        // payment gateway api
+        app.post('/create-payment-intent', verifyToken, async (req, res) => {
+            const { price } = req.body;
+            const amount = parseInt(price * 100);
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: amount,
+                currency: 'usd',
+                payment_method_types: ['card']
+            })
+            res.send({
+                clientSecret: paymentIntent.client_secret
+            });
+        })
+
+        app.post('/payment', verifyToken, async (req, res) => {
+            if (req.decoded.email !== req.body.email) {
+                return res.status(401).send({ message: 'Forbidden access' })
+            }
+            const payment = req.body;
+            const filter = { _id: new ObjectId(req.body.paymentUserId) }
+            const paymentResult = await paymentsCollection.insertOne(payment);
+            const updateDoc = {
+                $set: {
+                    transactionId: payment.transactionId,
+                    paymentStatus: payment.paymentStatus
+                }
+            }
+            const result = await bookParcelCollection.updateOne(filter, updateDoc);
+            res.send(paymentResult);
+        })
 
 
 
