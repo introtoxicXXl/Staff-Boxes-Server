@@ -106,7 +106,7 @@ async function run() {
                         _id: 1,
                         name: { $concat: ['$firstName', ' ', '$lastName'] }, // Combine firstName and lastName
                         email: 1,
-                        role:1,
+                        role: 1,
                         phoneNumber: 1,
                         numberOfParcels: { $size: '$parcels' },
                         totalSpentMoney: { $sum: '$parcels.price' }
@@ -114,6 +114,48 @@ async function run() {
                 }
             ];
             const result = await usersCollection.aggregate(pipeline).toArray();
+            res.send(result)
+        })
+
+        app.get('/admin/manageParcel', async (req, res) => {
+            const pipeline = [
+                {
+                    $match: {
+                        role: 'Delivery Man',
+                    },
+                },
+                {
+                    $lookup: {
+                        from: 'bookParcel',
+                        localField: 'email',
+                        foreignField: 'deliveryManId',
+                        as: 'parcels',
+                    },
+                },
+                {
+                    $project: {
+                        _id: 1,
+                        name: { $concat: ['$firstName', ' ', '$lastName'] },
+                    },
+                },
+            ];
+
+            const result = await usersCollection.aggregate(pipeline).toArray();
+            res.send(result)
+        })
+
+        app.patch('/admin/updateParcel/:id', async (req, res) => {
+            const id = req.params.id;
+            const { deliveryManId, status } = req.body;
+            const filter = { _id: new ObjectId(id) };
+            const updateDoc = {
+                $set: {
+                    deliveryManId,
+                    status,
+                }
+            };
+
+            const result = await bookParcelCollection.updateOne(filter, updateDoc);
             res.send(result)
         })
         // user post api 
@@ -185,7 +227,7 @@ async function run() {
             res.send(result);
         })
         // book parcel get api 
-        app.get('/bookParcel', verifyToken,adminVerify, async (req, res) => {
+        app.get('/bookParcel', verifyToken, adminVerify, async (req, res) => {
             const result = await bookParcelCollection.find().toArray();
             res.send(result);
         })
