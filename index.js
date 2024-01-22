@@ -30,6 +30,7 @@ async function run() {
         await client.connect();
 
         const usersCollection = client.db('Stuff-boxes').collection('users');
+        const deliveryMansCollection = client.db('Stuff-boxes').collection('deliveryMan');
         const bookParcelCollection = client.db('Stuff-boxes').collection('bookParcel');
 
         // middleware 
@@ -62,7 +63,7 @@ async function run() {
         const deliveryMan = async (req, res, next) => {
             const email = req.decoded.email;
             const query = { email: email };
-            const user = await usersCollection.find(query);
+            const user = await usersCollection.findOne(query);
             const isAdmin = user.role === "Delivery Man";
             if (!isAdmin) {
                 return res.status(403).send({ message: 'Forbidden Access' })
@@ -90,7 +91,7 @@ async function run() {
             const pipeline = [
                 {
                     $match: {
-                        role: { $in: ['Customer', 'Admin'] }
+                        role: { $in: ['Customer', 'Admin', 'Delivery Man'] }
                     }
                 },
                 {
@@ -104,7 +105,7 @@ async function run() {
                 {
                     $project: {
                         _id: 1,
-                        name: { $concat: ['$firstName', ' ', '$lastName'] }, // Combine firstName and lastName
+                        name: { $concat: ['$firstName', ' ', '$lastName'] },
                         email: 1,
                         role: 1,
                         phoneNumber: 1,
@@ -118,29 +119,7 @@ async function run() {
         })
 
         app.get('/admin/manageParcel', async (req, res) => {
-            const pipeline = [
-                {
-                    $match: {
-                        role: 'Delivery Man',
-                    },
-                },
-                {
-                    $lookup: {
-                        from: 'bookParcel',
-                        localField: 'email',
-                        foreignField: 'deliveryManId',
-                        as: 'parcels',
-                    },
-                },
-                {
-                    $project: {
-                        _id: 1,
-                        name: { $concat: ['$firstName', ' ', '$lastName'] },
-                    },
-                },
-            ];
-
-            const result = await usersCollection.aggregate(pipeline).toArray();
+            const result = await deliveryMansCollection.find().toArray();
             res.send(result)
         })
 
@@ -166,6 +145,11 @@ async function run() {
             if (existUser) {
                 return res.send({ message: 'User already in database' })
             }
+            if (user.role === 'Delivery Man') {
+                user.deliveryCount = 0;
+                user.review = 0;
+                const result = await deliveryMansCollection.insertOne(user);
+            }
             const result = await usersCollection.insertOne(user);
             res.send(result);
         })
@@ -190,12 +174,8 @@ async function run() {
                 return res.status(403).send({ message: 'Unauthorize Access' })
             }
             const query = { email: email };
-            const user = await usersCollection.findOne(query);
-            let deliveryMan = false;
-            if (user) {
-                admin = user?.role === "Delivery Man"
-            }
-            res.send({ deliveryMan })
+            const user = await deliveryMansCollection.findOne(query)
+            res.send(user)
         })
         // make admin api 
         app.patch('/users/admin/:id', verifyToken, adminVerify, async (req, res) => {
@@ -264,9 +244,8 @@ async function run() {
             res.send(result);
         })
 
-        app.patch('/cancel/:id', async (req, res) => {
+        app.patch('/cancel/:id', verifyToken, async (req, res) => {
             const id = req.params.id;
-            console.log(id)
             const filter = { _id: new ObjectId(id) };
             const doc = {
                 $set: {
@@ -276,6 +255,95 @@ async function run() {
             const result = await bookParcelCollection.updateOne(filter, doc)
         })
 
+        app.get('/admin/allDeliveryMan', async (req, res) => {
+            const result = await deliveryMansCollection.find().toArray()
+            res.send(result)
+        })
+
+
+        app.get('/deliveryMan/bookedParcel', verifyToken, async (req, res) => {
+            const pipeline = [
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: 'email',
+                        foreignField: 'email',
+                        as: 'userDetails'
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'deliveryMan',
+                        localField: 'deliveryManId',
+                        foreignField: '_id',
+                        as: 'deliveryManDetails'
+                    }
+                },
+                {
+                    $project: {
+                        _id: 1,
+                        bookedUserName: {
+                            $concat: [
+                                { $arrayElemAt: ['$userDetails.firstName', 0] },
+                                ' ',
+                                { $arrayElemAt: ['$userDetails.lastName', 0] }
+                            ]
+                        },
+                        receiversName: '$receiverName',
+                        bookedUserPhone: { $arrayElemAt: ['$userDetails.phoneNumber', 0] },
+                        requestedDeliveryDate: '$requestDate',
+                        approximateDeliveryDate: '$approximateDate',
+                        receiversPhoneNumber: '$receiverPhone',
+                        receiversAddress: '$deliveryAddress',
+                        deliveryAddressLatitude: '$deliveryAddressLatitude',
+                        deliveryAddressLongitude: '$deliveryAddressLongitude',
+                        deliveryManInfo: {
+                            name: {
+                                $concat: [
+                                    { $arrayElemAt: ['$deliveryManDetails.firstName', 0] },
+                                    ' ',
+                                    { $arrayElemAt: ['$deliveryManDetails.lastName', 0] }
+                                ]
+                            },
+                        }
+                    }
+                }
+            ];
+            const result = await bookParcelCollection.aggregate(pipeline).toArray();
+            res.send(result);
+        })
+
+
+        // stat api 
+        app.get('/userStat/:email', async (req, res) => {
+            const email = req.params.email;
+            const pipeline = [
+                {
+                  $match: { email: { $eq: email } } 
+                },
+                {
+                  $group: {
+                    _id: null,
+                    parcelCount: { $sum: 1 },
+                    totalCost: { $sum: '$price' } 
+                  }
+                },
+                {
+                  $project: {
+                    _id: 0,
+                    parcelCount: 1,
+                    totalCost: 1
+                  }
+                }
+              ];
+          
+              const result = await bookParcelCollection.aggregate(pipeline).toArray();
+              if (result.length > 0) {
+                res.send(result[0]);
+              } else {
+                res.send({ parcelCount: 0, totalCost: 0 });
+              }
+        })
 
 
 
