@@ -34,6 +34,7 @@ async function run() {
         const deliveryMansCollection = client.db('Stuff-boxes').collection('deliveryMan');
         const bookParcelCollection = client.db('Stuff-boxes').collection('bookParcel');
         const paymentsCollection = client.db('Stuff-boxes').collection('payment');
+        const reviewsCollection = client.db('Stuff-boxes').collection('review');
 
         // middleware 
         // verify token 
@@ -379,6 +380,16 @@ async function run() {
         })
 
 
+        // review api 
+        app.post('/review', async (req, res) => {
+            const review = req.body;
+            const result = await reviewsCollection.insertOne(review);
+            res.send(result)
+        })
+        app.get('/review', async (req, res) => {
+            const result = await reviewsCollection.find().toArray();
+            res.send(result)
+        })
 
 
         // Send a ping to confirm a successful connection
