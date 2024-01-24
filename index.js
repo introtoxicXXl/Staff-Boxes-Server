@@ -209,15 +209,30 @@ async function run() {
         // book parcel get api by email
         app.get('/bookParcel/:email', verifyToken, async (req, res) => {
             const email = req.params.email;
+            const { status } = req.query;
             const query = { email: email };
+            if (status && status.toLowerCase() !== 'all') {
+                query.status = status; 
+            }
             const result = await bookParcelCollection.find(query).toArray();
             res.send(result);
-        })
+        });
+
         // book parcel get api 
-        app.get('/bookParcel', verifyToken, adminVerify, async (req, res) => {
-            const result = await bookParcelCollection.find().toArray();
+        app.get('/allBookParcel', verifyToken, adminVerify, async (req, res) => {
+            const { dateFrom, dateTo } = req.query;
+            let query = {};
+          
+            if (dateFrom && dateTo) {
+              query = {
+                requestDate: { $gte: dateFrom, $lte: dateTo },
+              };
+            }
+            const result = await bookParcelCollection.find(query).toArray();
             res.send(result);
-        })
+          });
+
+
         // book parcel get api by id
         app.get('/bookMyParcel/:id', verifyToken, async (req, res) => {
             const id = req.params.id;
@@ -264,9 +279,64 @@ async function run() {
             res.send(result)
         })
 
-        app.get('/admin/allDeliveryMan', verifyToken, async (req, res) => {
-            const result = await deliveryMansCollection.find().toArray()
-            res.send(result)
+        app.get('/admin/allDeliveryMan', verifyToken, adminVerify, async (req, res) => {
+            const result = await bookParcelCollection.aggregate([
+                {
+                    $match: {
+                        status: 'Delivered'
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$deliveryManId',
+                        totalReviews: { $sum: 1 },
+                        totalDeliveryCount: { $sum: { $cond: [{ $eq: ['$status', 'Delivered'] }, 1, 0] } },
+                        averageRating: { $avg: '$deliveryManRating' }
+                    }
+                },
+                {
+                    $sort: {
+                        totalReviews: -1,
+                        totalDeliveryCount: -1
+                    }
+                },
+                {
+                    $limit: 5
+                }
+            ]).toArray();
+
+            const userIds = result.map(item => new ObjectId(item._id));
+
+            const deliveryMen = await usersCollection.find({
+                _id: { $in: userIds },
+                role: 'Delivery Man'
+            }).project({
+                _id: 1,
+                firstName: 1,
+                lastName: 1,
+                image: 1,
+                phoneNumber: 1,
+                reviews: 1
+            }).toArray();
+
+            const topDeliveryMen = result.map(item => {
+                const deliveryManInfo = deliveryMen.find(d => d._id.equals(new ObjectId(item._id)));
+
+                const totalRating = deliveryManInfo.reviews.reduce((sum, review) => sum + review.rating, 0);
+                const averageRating = totalRating / deliveryManInfo.reviews.length;
+
+                return {
+                    _id: deliveryManInfo._id,
+                    firstName: deliveryManInfo.firstName,
+                    lastName: deliveryManInfo.lastName,
+                    image: deliveryManInfo.image,
+                    phoneNumber: deliveryManInfo.phoneNumber,
+                    averageRating,
+                    totalDeliveryCount: item.totalDeliveryCount
+                };
+            });
+
+            res.send(topDeliveryMen);
         })
 
         app.get('/deliveryMan/review/:email', async (req, res) => {
@@ -460,6 +530,24 @@ async function run() {
             const paymentStatusResult = await bookParcelCollection.aggregate(paymentStatusPipeline).toArray();
             res.send({ parcelCountResult, paymentStatusResult });
         })
+        // home stat 
+        app.get('/home-stat', async (req, res) => {
+            const totalDeliveredCount = await bookParcelCollection.countDocuments({ status: 'Delivered' });
+            const totalParcelsCount = await bookParcelCollection.countDocuments();
+            const totalUser = await usersCollection.countDocuments();
+            const deliveredPercentage = (totalDeliveredCount / totalParcelsCount) * 100;
+            const remainingPercentage= 100-deliveredPercentage;
+
+            res.send({
+                totalDeliveredCount,
+                totalParcelsCount,
+                deliveredPercentage,
+                remainingPercentage,
+                totalUser
+            });
+        })
+
+
 
         // payment gateway api
         app.post('/create-payment-intent', verifyToken, async (req, res) => {
