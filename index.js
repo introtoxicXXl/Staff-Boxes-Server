@@ -63,17 +63,6 @@ async function run() {
             }
             next();
         }
-        // deliveryMan verify
-        const deliveryMan = async (req, res, next) => {
-            const email = req.decoded.email;
-            const query = { email: email };
-            const user = await usersCollection.findOne(query);
-            const isAdmin = user.role === "Delivery Man";
-            if (!isAdmin) {
-                return res.status(403).send({ message: 'Forbidden Access' })
-            }
-            next();
-        }
 
         // jwt api 
         app.post('/jwt', async (req, res) => {
@@ -91,7 +80,7 @@ async function run() {
             res.send(result)
         })
         // users get api 
-        app.get('/admin/userDetails', verifyToken, async (req, res) => {
+        app.get('/admin/userDetails', verifyToken,adminVerify, async (req, res) => {
             const pipeline = [
                 {
                     $match: {
@@ -124,12 +113,12 @@ async function run() {
             res.send(result)
         })
 
-        app.get('/admin/manageParcel', async (req, res) => {
+        app.get('/admin/manageParcel',verifyToken,adminVerify, async (req, res) => {
             const result = await deliveryMansCollection.find().toArray();
             res.send(result)
         })
 
-        app.patch('/admin/updateParcel/:id', async (req, res) => {
+        app.patch('/admin/updateParcel/:id',verifyToken,adminVerify, async (req, res) => {
             const id = req.params.id;
             const { deliveryManId, status } = req.body;
             const filter = { _id: new ObjectId(id) };
@@ -159,7 +148,7 @@ async function run() {
             res.send(result);
         })
         // admin api 
-        app.get('/users/admin/:email', verifyToken, async (req, res) => {
+        app.get('/users/admin/:email', verifyToken,adminVerify, async (req, res) => {
             const email = req.params.email;
             if (email !== req.decoded.email) {
                 return res.status(403).send({ message: 'Unauthorize Access' })
@@ -171,16 +160,6 @@ async function run() {
                 admin = user?.role === "Admin"
             }
             res.send({ admin })
-        })
-        // deliveryman api 
-        app.get('/users/deliveryMan/:email', verifyToken, async (req, res) => {
-            const email = req.params.email;
-            if (email !== req.decoded.email) {
-                return res.status(403).send({ message: 'Unauthorize Access' })
-            }
-            const query = { email: email };
-            const user = await deliveryMansCollection.findOne(query)
-            res.send(user)
         })
         // make admin api 
         app.patch('/users/admin/:id', verifyToken, adminVerify, async (req, res) => {
@@ -198,6 +177,30 @@ async function run() {
                 res.send(result)
             }
         })
+        // book parcel get api 
+        app.get('/allBookParcel', verifyToken, adminVerify, async (req, res) => {
+            const { dateFrom, dateTo } = req.query;
+            let query = {};
+          
+            if (dateFrom && dateTo) {
+              query = {
+                requestDate: { $gte: dateFrom, $lte: dateTo },
+              };
+            }
+            const result = await bookParcelCollection.find(query).toArray();
+            res.send(result);
+          });
+        // deliveryman api 
+        app.get('/users/deliveryMan/:email', verifyToken, async (req, res) => {
+            const email = req.params.email;
+            if (email !== req.decoded.email) {
+                return res.status(403).send({ message: 'Unauthorize Access' })
+            }
+            const query = { email: email };
+            const user = await deliveryMansCollection.findOne(query)
+            res.send(user)
+        })
+        
 
         // booking parcel api 
         // book parcel post api 
@@ -218,21 +221,7 @@ async function run() {
             res.send(result);
         });
 
-        // book parcel get api 
-        app.get('/allBookParcel', verifyToken, adminVerify, async (req, res) => {
-            const { dateFrom, dateTo } = req.query;
-            let query = {};
-          
-            if (dateFrom && dateTo) {
-              query = {
-                requestDate: { $gte: dateFrom, $lte: dateTo },
-              };
-            }
-            const result = await bookParcelCollection.find(query).toArray();
-            res.send(result);
-          });
-
-
+        
         // book parcel get api by id
         app.get('/bookMyParcel/:id', verifyToken, async (req, res) => {
             const id = req.params.id;
@@ -299,14 +288,9 @@ async function run() {
                         totalReviews: -1,
                         totalDeliveryCount: -1
                     }
-                },
-                {
-                    $limit: 5
                 }
             ]).toArray();
-
             const userIds = result.map(item => new ObjectId(item._id));
-
             const deliveryMen = await usersCollection.find({
                 _id: { $in: userIds },
                 role: 'Delivery Man'
@@ -318,13 +302,10 @@ async function run() {
                 phoneNumber: 1,
                 reviews: 1
             }).toArray();
-
-            const topDeliveryMen = result.map(item => {
+            const allDeliveryMen = result.map(item => {
                 const deliveryManInfo = deliveryMen.find(d => d._id.equals(new ObjectId(item._id)));
-
                 const totalRating = deliveryManInfo.reviews.reduce((sum, review) => sum + review.rating, 0);
                 const averageRating = totalRating / deliveryManInfo.reviews.length;
-
                 return {
                     _id: deliveryManInfo._id,
                     firstName: deliveryManInfo.firstName,
@@ -336,7 +317,7 @@ async function run() {
                 };
             });
 
-            res.send(topDeliveryMen);
+            res.send(allDeliveryMen);
         })
 
         app.get('/deliveryMan/review/:email', async (req, res) => {
@@ -429,10 +410,8 @@ async function run() {
 
             const topDeliveryMen = result.map(item => {
                 const deliveryManInfo = deliveryMen.find(d => d._id.equals(new ObjectId(item._id)));
-
                 const totalRating = deliveryManInfo.reviews.reduce((sum, review) => sum + review.rating, 0);
                 const averageRating = totalRating / deliveryManInfo.reviews.length;
-
                 return {
                     _id: deliveryManInfo._id,
                     firstName: deliveryManInfo.firstName,
@@ -442,7 +421,6 @@ async function run() {
                     totalDeliveryCount: item.totalDeliveryCount
                 };
             });
-
             res.send(topDeliveryMen);
         })
 
@@ -485,7 +463,7 @@ async function run() {
             }
         })
         // admin stat api 
-        app.get('/admin-stat', async (req, res) => {
+        app.get('/admin-stat',verifyToken,adminVerify, async (req, res) => {
 
             const parcelCountPipeline = [
                 {
