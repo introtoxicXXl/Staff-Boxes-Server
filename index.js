@@ -153,7 +153,6 @@ async function run() {
             }
             if (user.role === 'Delivery Man') {
                 user.deliveryCount = 0;
-                user.review = 0;
                 const result = await deliveryMansCollection.insertOne(user);
             }
             const result = await usersCollection.insertOne(user);
@@ -187,23 +186,17 @@ async function run() {
         app.patch('/users/admin/:id', verifyToken, adminVerify, async (req, res) => {
             const userId = req.params.id;
             const role = req.body.role;
-            const item = req.body;
-            const userFilter = { _id: new ObjectId(userId) };
-            const userUpdateDoc = {
-                $set: {
-                    role: role
-                }
-            };
-            const result = await usersCollection.updateOne(userFilter, userUpdateDoc);
             if (role === 'Delivery Man') {
-                const deliveryManDoc = {
-                    _id: new ObjectId(userId),
-                    ...item,
-                    deliveryCount: 0,
+                const userFilter = { _id: new ObjectId(userId) };
+                const userUpdateDoc = {
+                    $set: {
+                        role: role,
+                        deliveryCount: 0,
+                    }
                 };
-                await deliveryMansCollection.insertOne(deliveryManDoc);
+                const result = await usersCollection.updateOne(userFilter, userUpdateDoc);
+                res.send(result)
             }
-            res.send(result)
         })
 
         // booking parcel api 
@@ -258,39 +251,43 @@ async function run() {
             res.send(result);
         })
 
-        app.patch('/cancel/:id', verifyToken, async (req, res) => {
+        app.patch('/update/:id', verifyToken, async (req, res) => {
             const id = req.params.id;
+            const item = req.body;
             const filter = { _id: new ObjectId(id) };
             const doc = {
                 $set: {
-                    status: "Cancel"
+                    status: item.status
                 }
             }
             const result = await bookParcelCollection.updateOne(filter, doc)
+            res.send(result)
         })
 
-        app.get('/admin/allDeliveryMan', async (req, res) => {
+        app.get('/admin/allDeliveryMan', verifyToken, async (req, res) => {
             const result = await deliveryMansCollection.find().toArray()
             res.send(result)
         })
 
+        app.get('/deliveryMan/review/:email', async (req, res) => {
+            const email = req.params.email;
+            const query = { email: email }
+            const result = await deliveryMansCollection.findOne(query);
+            res.send(result)
+        })
 
-        app.get('/deliveryMan/bookedParcel', verifyToken, async (req, res) => {
+        app.get('/deliveryMan/bookedParcel/:id', verifyToken, async (req, res) => {
+            const id = req.params.id;
             const pipeline = [
+                {
+                    $match: { deliveryManId: id }
+                },
                 {
                     $lookup: {
                         from: 'users',
                         localField: 'email',
                         foreignField: 'email',
                         as: 'userDetails'
-                    }
-                },
-                {
-                    $lookup: {
-                        from: 'deliveryMan',
-                        localField: 'deliveryManId',
-                        foreignField: '_id',
-                        as: 'deliveryManDetails'
                     }
                 },
                 {
@@ -311,22 +308,73 @@ async function run() {
                         receiversAddress: '$deliveryAddress',
                         deliveryAddressLatitude: '$deliveryAddressLatitude',
                         deliveryAddressLongitude: '$deliveryAddressLongitude',
-                        deliveryManInfo: {
-                            name: {
-                                $concat: [
-                                    { $arrayElemAt: ['$deliveryManDetails.firstName', 0] },
-                                    ' ',
-                                    { $arrayElemAt: ['$deliveryManDetails.lastName', 0] }
-                                ]
-                            },
-                        }
+                        status: '$status',
                     }
                 }
             ];
+
             const result = await bookParcelCollection.aggregate(pipeline).toArray();
             res.send(result);
         })
 
+        // top delivery man api 
+        app.get('/topDeliveryMan', async (req, res) => {
+            const result = await bookParcelCollection.aggregate([
+                {
+                    $match: {
+                        status: 'Delivered'
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$deliveryManId',
+                        totalReviews: { $sum: 1 },
+                        totalDeliveryCount: { $sum: { $cond: [{ $eq: ['$status', 'Delivered'] }, 1, 0] } },
+                        averageRating: { $avg: '$deliveryManRating' }
+                    }
+                },
+                {
+                    $sort: {
+                        totalReviews: -1,
+                        totalDeliveryCount: -1
+                    }
+                },
+                {
+                    $limit: 5
+                }
+            ]).toArray();
+
+            const userIds = result.map(item => new ObjectId(item._id));
+
+            const deliveryMen = await usersCollection.find({
+                _id: { $in: userIds },
+                role: 'Delivery Man'
+            }).project({
+                _id: 1,
+                firstName: 1,
+                lastName: 1,
+                image: 1,
+                reviews: 1
+            }).toArray();
+
+            const topDeliveryMen = result.map(item => {
+                const deliveryManInfo = deliveryMen.find(d => d._id.equals(new ObjectId(item._id)));
+
+                const totalRating = deliveryManInfo.reviews.reduce((sum, review) => sum + review.rating, 0);
+                const averageRating = totalRating / deliveryManInfo.reviews.length;
+
+                return {
+                    _id: deliveryManInfo._id,
+                    firstName: deliveryManInfo.firstName,
+                    lastName: deliveryManInfo.lastName,
+                    image: deliveryManInfo.image,
+                    averageRating,
+                    totalDeliveryCount: item.totalDeliveryCount
+                };
+            });
+
+            res.send(topDeliveryMen);
+        })
 
         // stat api 
         app.get('/userStat/:email', verifyToken, async (req, res) => {
@@ -458,13 +506,16 @@ async function run() {
             };
 
             await deliveryMansCollection.updateOne(deliveryManFilter, deliveryManUpdate);
+            await usersCollection.updateOne(deliveryManFilter, deliveryManUpdate);
 
             res.send(result)
         })
         app.get('/review', async (req, res) => {
-            const result = await reviewsCollection.find().toArray();
-            res.send(result)
-        })
+            const result = await reviewsCollection.aggregate([
+                { $sample: { size: 25 } }
+            ]).toArray();
+            res.send(result);
+        });
 
 
         // Send a ping to confirm a successful connection
