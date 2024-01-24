@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
+// const moment = require('moment');
 const port = process.env.PORT || 5000;
 const stripe = require("stripe")(process.env.STRIP_SECRET_KEY);
 
@@ -108,9 +109,11 @@ async function run() {
                 {
                     $project: {
                         _id: 1,
-                        name: { $concat: ['$firstName', ' ', '$lastName'] },
+                        firstName: 1,
+                        lastName: 1,
                         email: 1,
                         role: 1,
+                        image: 1,
                         phoneNumber: 1,
                         numberOfParcels: { $size: '$parcels' },
                         totalSpentMoney: { $sum: '$parcels.price' }
@@ -182,17 +185,25 @@ async function run() {
         })
         // make admin api 
         app.patch('/users/admin/:id', verifyToken, adminVerify, async (req, res) => {
-            const id = req.params.id;
+            const userId = req.params.id;
+            const role = req.body.role;
             const item = req.body;
-            console.log(item)
-            const filter = { _id: new ObjectId(id) };
-            const updateDoc = {
+            const userFilter = { _id: new ObjectId(userId) };
+            const userUpdateDoc = {
                 $set: {
-                    role: item.role
+                    role: role
                 }
+            };
+            const result = await usersCollection.updateOne(userFilter, userUpdateDoc);
+            if (role === 'Delivery Man') {
+                const deliveryManDoc = {
+                    _id: new ObjectId(userId),
+                    ...item,
+                    deliveryCount: 0,
+                };
+                await deliveryMansCollection.insertOne(deliveryManDoc);
             }
-            const result = await usersCollection.updateOne(filter, updateDoc)
-            res.send(result);
+            res.send(result)
         })
 
         // booking parcel api 
@@ -328,7 +339,15 @@ async function run() {
                     $group: {
                         _id: null,
                         parcelCount: { $sum: 1 },
-                        totalCost: { $sum: '$price' }
+                        totalCost: {
+                            $sum: {
+                                $cond: {
+                                    if: { $eq: ['$paymentStatus', 'Success'] },
+                                    then: '$price',
+                                    else: 0
+                                }
+                            }
+                        }
                     }
                 },
                 {
@@ -346,6 +365,52 @@ async function run() {
             } else {
                 res.send({ parcelCount: 0, totalCost: 0 });
             }
+        })
+        // admin stat api 
+        app.get('/admin-stat', async (req, res) => {
+
+            const parcelCountPipeline = [
+                {
+                    $group: {
+                        _id: { $dateToString: { format: "%Y-%m-%d", date: { $toDate: "$bookingDate" } } },
+                        parcelCount: { $sum: 1 },
+                    },
+                },
+                {
+                    $project: {
+                        _id: 0,
+                        bookingDate: "$_id",
+                        parcelCount: 1,
+                    },
+                },
+                {
+                    $sort: { bookingDate: 1 },
+                },
+            ];
+            const paymentStatusPipeline = [
+                {
+                    $match: {
+                        paymentStatus: { $in: ['Pending', 'Success'] },
+                    },
+                },
+                {
+                    $group: {
+                        _id: "$paymentStatus",
+                        count: { $sum: 1 },
+                    },
+                },
+                {
+                    $project: {
+                        _id: 0,
+                        paymentStatus: "$_id",
+                        count: 1,
+                    },
+                },
+            ];
+
+            const parcelCountResult = await bookParcelCollection.aggregate(parcelCountPipeline).toArray();
+            const paymentStatusResult = await bookParcelCollection.aggregate(paymentStatusPipeline).toArray();
+            res.send({ parcelCountResult, paymentStatusResult });
         })
 
         // payment gateway api
@@ -384,6 +449,16 @@ async function run() {
         app.post('/review', async (req, res) => {
             const review = req.body;
             const result = await reviewsCollection.insertOne(review);
+            const deliveryManId = review.deliveryManId;
+            const deliveryManFilter = { _id: new ObjectId(deliveryManId) };
+            const deliveryManUpdate = {
+                $push: {
+                    reviews: review
+                }
+            };
+
+            await deliveryMansCollection.updateOne(deliveryManFilter, deliveryManUpdate);
+
             res.send(result)
         })
         app.get('/review', async (req, res) => {
